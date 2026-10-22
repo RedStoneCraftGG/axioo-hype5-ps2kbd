@@ -1,48 +1,76 @@
-#!/usr/bin/env bash
-# Copy files only. This script deliberately does not enable/start the service.
-set -Eeuo pipefail
+#!/bin/bash
+# install-on-target.sh - install the PS/2 keyboard bridge as a systemd service.
+#   sudo ./install-on-target.sh
+set -e
 
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run with sudo: sudo $0" >&2
-  exit 1
-fi
-if [[ ! -r /etc/os-release ]]; then
-  echo "Cannot identify the installed Linux system; aborting." >&2
-  exit 1
-fi
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required." >&2
-  exit 1
-fi
-if [[ ! -f "$ROOT_DIR/scripts/ps2kbd.py" || ! -f "$ROOT_DIR/systemd/ps2kbd.service" ]]; then
-  echo "Run this installer from the extracted repository directory." >&2
-  exit 1
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "must be run with sudo"; exit 1
 fi
 
-echo "WARNING: experimental code; it unbinds i8042 and accesses /dev/port."
-echo "The installer will copy files only. It will NOT start or enable the service."
-read -r -p 'Continue copying files? Type YES: ' answer
-[[ "$answer" == "YES" ]] || { echo "Cancelled."; exit 0; }
-
-install -D -m 0755 "$ROOT_DIR/scripts/ps2kbd.py" /usr/local/bin/ps2kbd.py
-install -D -m 0644 "$ROOT_DIR/README.md" /usr/local/share/doc/ps2kbd/README.md
-install -D -m 0644 "$ROOT_DIR/doc/SAFETY.md" /usr/local/share/doc/ps2kbd/SAFETY.md
-install -D -m 0644 "$ROOT_DIR/systemd/ps2kbd.service" /etc/systemd/system/ps2kbd.service
-if [[ ! -e /etc/modules-load.d/uinput.conf ]]; then
-  printf '%s\n' 'uinput' > /etc/modules-load.d/uinput.conf
-  chmod 0644 /etc/modules-load.d/uinput.conf
-else
-  echo "Keeping existing /etc/modules-load.d/uinput.conf unchanged."
+if [ ! -f /etc/os-release ]; then
+    echo "ERROR: this does not appear to be an installed system."; exit 1
 fi
+
+echo "== 1/6 check prerequisites"
+if ! command -v python3 >/dev/null; then
+    echo "ERROR: python3 not found"; exit 1
+fi
+if [ ! -e /dev/uinput ] && ! modprobe uinput 2>/dev/null; then
+    echo "WARNING: /dev/uinput is missing and the uinput module failed to load"
+    echo "  -> ensure the kernel has CONFIG_INPUT_UINPUT"
+fi
+
+echo "== 2/6 ensure the uinput module loads automatically"
+echo "uinput" > /etc/modules-load.d/uinput.conf
+
+echo "== 3/6 install script"
+install -D -m755 "$HERE/scripts/ps2kbd.py" /usr/local/bin/ps2kbd.py
+
+echo "== 4/6 install documentation"
+install -D -m644 "$HERE/README.md" /usr/local/share/doc/ps2kbd/README.md
+
+echo "== 5/6 install systemd unit"
+install -D -m644 "$HERE/systemd/ps2kbd.service" /etc/systemd/system/ps2kbd.service
 systemctl daemon-reload
 
-cat <<'EOF'
-Files copied. The service has NOT been started or enabled.
-Read /usr/local/share/doc/ps2kbd/SAFETY.md before proceeding.
-After a manual live-session test, you may start it explicitly with:
-  sudo systemctl start ps2kbd.service
-Stop it with:
+echo "== 6/7 quick test (5 seconds)"
+timeout 5 python3 /usr/local/bin/ps2kbd.py --testirq || true
+
+echo "== 7/7 enable the service and start it now"
+if systemctl enable --now ps2kbd.service; then
+    echo "The ps2kbd service was successfully enabled and started."
+else
+    echo "ERROR: failed to enable ps2kbd.service."
+    echo "Check the unit and logs with:"
+    echo "  systemctl status ps2kbd.service --no-pager"
+    echo "  journalctl -u ps2kbd.service -b --no-pager"
+    exit 1
+fi
+
+cat <<'EOM'
+
+============================================================
+INSTALLATION COMPLETE
+
+The service has been enabled to run automatically at boot
+and has already been started in this session.
+
+Check status:
+  systemctl status ps2kbd.service --no-pager
+  journalctl -u ps2kbd.service -b -n 50 --no-pager
+
+Test the internal keyboard. If there is a problem, stop the service:
   sudo systemctl stop ps2kbd.service
-Do not enable it at boot until recovery behavior is verified.
-EOF
+  sudo python3 /usr/local/bin/ps2kbd.py --stop
+
+To disable automatic start at boot and stop the service:
+  sudo systemctl disable --now ps2kbd.service
+
+Note: this script only enables the installed service.
+Success at boot still depends on the contents of the systemd unit
+and whether ps2kbd.py can initialize the controller when
+the service starts.
+============================================================
+EOM
