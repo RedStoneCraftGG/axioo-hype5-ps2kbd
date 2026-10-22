@@ -1,0 +1,19 @@
+[Unit]
+Description=Experimental PS/2 internal keyboard polling bridge
+Documentation=file:/usr/local/share/doc/ps2kbd/README.md
+After=systemd-modules-load.service
+ConditionPathExists=/usr/local/bin/ps2kbd.py
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'modprobe uinput || test -e /dev/uinput'
+ExecStart=/usr/bin/python3 /usr/local/bin/ps2kbd.py
+Restart=no
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ps2kbd
+
+[Install]
+WantedBy=multi-user.target

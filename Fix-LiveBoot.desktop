@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Axioo Live Boot Fix
+Comment=Experimental keyboard and touchpad workaround
+Exec=gnome-terminal -- bash -c 'cd "$(dirname "%k")"; bash ./fix-liveboot.sh; result=$?; echo; echo "Exit code: $result"; read -r -p "Press Enter to close..."'
+Icon=input-keyboard
+Terminal=false
+Categories=Utility;
